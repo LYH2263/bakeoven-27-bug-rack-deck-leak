@@ -1,4 +1,11 @@
-"""Oven scheduling with half-open ferment+bake intervals and next free window."""
+"""Oven scheduling with half-open ferment+bake intervals and next free window.
+
+计容规则（与前端甘特同一套口径）：
+- 发酵段只占醒发架，烘烤段只占炉膛，互不相挤；
+- 区间一律半开 [start, end)：端点贴边相接不算同时占用；
+- 醒发架格数 / 炉膛盘数留空(None)表示该资源不按容量计容；
+- 两项都留空时退回纯时间半开重叠互斥（find_conflicts）。
+"""
 
 from __future__ import annotations
 
@@ -47,6 +54,7 @@ def build_occupancies(
 
 
 def find_conflicts(existing: list[Occupancy], candidates: list[Occupancy]) -> list[tuple[Occupancy, Occupancy]]:
+    """纯时间半开重叠互斥：仅当架/膛两项都留空时使用。"""
     hits: list[tuple[Occupancy, Occupancy]] = []
     for cand in candidates:
         for ex in existing:
@@ -67,11 +75,16 @@ class OvenCapacity:
 @dataclass(frozen=True)
 class CapacityViolation:
     resource: str  # rack(架满) | hearth(膛满)
+    phase: str  # 该资源承载的阶段：rack=ferment | hearth=bake
     limit: int
     peak: int
     start: int
     end: int
     rivals: tuple[int, ...]  # 同时占用该资源的对手批次 id
+
+
+# 资源 → 承载阶段；架只统计发酵，膛只统计烘烤
+RESOURCE_PHASE = {"rack": "ferment", "hearth": "bake"}
 
 
 def _sweep_violation(
@@ -102,6 +115,7 @@ def _sweep_violation(
             if total > limit and (worst is None or total > worst.peak):
                 worst = CapacityViolation(
                     resource=resource,
+                    phase=RESOURCE_PHASE[resource],
                     limit=limit,
                     peak=total,
                     start=prev,
@@ -122,18 +136,28 @@ def check_capacity(
     existing: list[Occupancy],
     candidates: list[Occupancy],
     capacity: OvenCapacity,
-) -> CapacityViolation | None:
-    """Check oven capacity against currently scheduled occupancy."""
+) -> list[CapacityViolation]:
+    """架/膛分开计容：返回全部超限（架满、膛满可能同时出现）。
+
+    只在设了上限的资源上计容；未设上限的资源不拦。
+    结果按超编数(peak-limit)降序、再按开始时刻升序排列。
+    """
     if not candidates:
-        return None
+        return []
     oven_id = candidates[0].oven_id
     on_oven = [o for o in existing if o.oven_id == oven_id]
-    if capacity.rack_slots is None and capacity.hearth_slots is None:
-        return None
-    limit = capacity.rack_slots if capacity.rack_slots is not None else 99
-    ex = [(o.interval.start, o.interval.end, o.batch_id) for o in on_oven]
-    cand = [(o.interval.start, o.interval.end, o.batch_id) for o in candidates]
-    return _sweep_violation(ex, cand, limit, "rack")
+    violations: list[CapacityViolation] = []
+    for resource, limit in (("rack", capacity.rack_slots), ("hearth", capacity.hearth_slots)):
+        if limit is None:
+            continue
+        phase = RESOURCE_PHASE[resource]
+        ex = [(o.interval.start, o.interval.end, o.batch_id) for o in on_oven if o.phase == phase]
+        cand = [(o.interval.start, o.interval.end, o.batch_id) for o in candidates if o.phase == phase]
+        v = _sweep_violation(ex, cand, limit, resource)
+        if v is not None:
+            violations.append(v)
+    violations.sort(key=lambda v: (-(v.peak - v.limit), v.start))
+    return violations
 
 
 def next_free_window(

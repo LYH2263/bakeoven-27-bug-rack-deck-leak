@@ -6,17 +6,24 @@ const DAY_START = 8 * 60, DAY_END = 18 * 60, SPAN = DAY_END - DAY_START;
 function pct(m: number) { return ((m - DAY_START) / SPAN) * 100; }
 function fmt(m: number) { const h = Math.floor(m / 60), mm = m % 60; return `${String(h).padStart(2, "0")}:${String(mm).padStart(2, "0")}`; }
 
-type Seg = { start: number; end: number; count: number };
-// 半开区间扫描线：同一时刻先收尾后开场，端点相接不重叠
+type Seg = { start: number; end: number; count: number; codes: string[] };
+// 半开区间扫描线：同一时刻先收尾后开场，端点相接不重叠；count 为同时在场的真实段数
 function sweep(blocks: Block[]): Seg[] {
-  const ev: [number, number][] = [];
-  for (const b of blocks) if (b.end_min > b.start_min) { ev.push([b.start_min, 1]); ev.push([b.end_min, -1]); }
+  const ev: [number, number, string][] = [];
+  for (const b of blocks) if (b.end_min > b.start_min) {
+    ev.push([b.start_min, 1, b.code]);
+    ev.push([b.end_min, -1, b.code]);
+  }
   ev.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
   const segs: Seg[] = [];
-  let count = 0, prev: number | null = null;
-  for (const [t, d] of ev) {
-    if (prev !== null && t > prev && count > 0) segs.push({ start: prev, end: t, count });
-    count += d; prev = t;
+  const active = new Set<string>();
+  let prev: number | null = null;
+  for (const [t, d, code] of ev) {
+    if (prev !== null && t > prev && active.size > 0) {
+      segs.push({ start: prev, end: t, count: active.size, codes: [...active] });
+    }
+    if (d === 1) active.add(code); else active.delete(code);
+    prev = t;
   }
   return segs;
 }
@@ -36,21 +43,23 @@ export default function GanttPage() {
       if (!map.has(b.oven_id)) map.set(b.oven_id, { label: b.oven_label, blocks: [] });
       map.get(b.oven_id)!.blocks.push(b);
     }
-    return [...map.entries()].map(([oid, row]) => {
-      const mixed = sweep(row.blocks).map((s) => ({ ...s, count: Math.max(1, s.count - 1) }));
-      const rack = mixed.filter((s) => s.count >= 2);
-      const hearth = mixed.filter((s) => s.count >= 2);
-      return { oid, ...row, rack, hearth };
-    });
+    // 架只吃发酵、膛只吃烘烤：两路各自独立扫描真实叠段数
+    return [...map.entries()].map(([oid, row]) => ({
+      oid,
+      ...row,
+      rack: sweep(row.blocks.filter((b) => b.phase === "ferment")).filter((s) => s.count >= 2),
+      hearth: sweep(row.blocks.filter((b) => b.phase === "bake")).filter((s) => s.count >= 2),
+    }));
   }, [blocks]);
 
   function occMarkers(segs: Seg[], cls: string, limit: number | null | undefined) {
+    const resName = cls === "rack" ? "醒发架" : "炉膛";
     return segs.map((s, i) => (
       <div
         key={i}
         className={`gantt-occ ${cls}${limit != null && s.count > limit ? " over" : ""}`}
         style={{ left: `${pct(s.start)}%`, width: `${((s.end - s.start) / SPAN) * 100}%` }}
-        title={`${fmt(s.start)}–${fmt(s.end)} ${cls === "rack" ? "醒发架" : "炉膛"}占用 ${s.count}${limit != null ? ` / 上限 ${limit}` : ""}`}
+        title={`${fmt(s.start)}–${fmt(s.end)} ${resName}同时在占 ${s.count} 批：${s.codes.join("、")}${limit != null ? `（上限 ${limit}）` : ""}`}
       >
         {cls === "rack" ? "架" : "膛"}{s.count}
       </div>

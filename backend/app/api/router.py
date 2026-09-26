@@ -44,6 +44,21 @@ def _rival_label(db: Session, batch_id: int) -> str:
     return f"{b.code}(#{batch_id})" if b else f"批次#{batch_id}"
 
 
+_PHASE_NAME = {"ferment": "发酵段", "bake": "烘烤段"}
+
+
+def _violation_detail(db: Session, v) -> str:
+    """架满/膛满文案：哪边满、上限、同时在占几批、对手批号、区间。"""
+    resource_name = "醒发架" if v.resource == "rack" else "炉膛"
+    unit = "格" if v.resource == "rack" else "盘"
+    rivals = "、".join(_rival_label(db, rid) for rid in v.rivals) or "（无）"
+    return (
+        f"{resource_name}满：上限{v.limit}{unit}，"
+        f"{_fmt_min(v.start)}–{_fmt_min(v.end)} 同时在占{v.peak}批"
+        f"（对手 {rivals}）"
+    )
+
+
 def _all_occupancies(db: Session) -> list[Occupancy]:
     batches = db.scalars(select(Batch)).all()
     out: list[Occupancy] = []
@@ -123,22 +138,20 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
     capacity = _capacity(oven)
 
     detail: str | None = None
-    hits = find_conflicts(existing, candidates)
-    if hits:
-        ex, cand = hits[0]
-        phase_name = "发酵段" if ex.phase == "ferment" else "烘烤段"
-        detail = (
-            f"时间重叠：与{_rival_label(db, ex.batch_id)} 的{phase_name}在 "
-            f"[{_fmt_min(cand.interval.start)},{_fmt_min(cand.interval.end)}) 重叠"
-        )
-    elif capacity.rack_slots is not None or capacity.hearth_slots is not None:
-        violation = check_capacity(existing, candidates, capacity)
-        if violation is not None:
-            rivals = "、".join(_rival_label(db, rid) for rid in violation.rivals) or "（无）"
+    if capacity.rack_slots is None and capacity.hearth_slots is None:
+        # 两项都留空：退回纯时间半开重叠互斥（贴边相接不算重叠）
+        hits = find_conflicts(existing, candidates)
+        if hits:
+            ex, cand = hits[0]
             detail = (
-                f"时间重叠：与{rivals} 在 "
-                f"[{_fmt_min(violation.start)},{_fmt_min(violation.end)}) 重叠"
+                f"时间重叠：与{_rival_label(db, ex.batch_id)} 的{_PHASE_NAME[ex.phase]}在 "
+                f"[{_fmt_min(cand.interval.start)},{_fmt_min(cand.interval.end)}) 重叠"
             )
+    else:
+        # 架只吃发酵、膛只吃烘烤；超了分别报“醒发架满 / 炉膛满”
+        violations = check_capacity(existing, candidates, capacity)
+        if violations:
+            detail = "；".join(_violation_detail(db, v) for v in violations)
 
     if detail is not None:
         db.add(ConflictLog(batch_code=code, oven_id=oven.id, detail=detail[:240]))
@@ -181,7 +194,21 @@ def gantt(db: Session = Depends(get_db)):
 
 @api_router.get("/conflicts", response_model=list[ConflictOut])
 def conflicts(db: Session = Depends(get_db)):
-    return db.scalars(select(ConflictLog).order_by(ConflictLog.id.desc())).all()
+    rows = db.scalars(select(ConflictLog).order_by(ConflictLog.id.desc())).all()
+    out: list[ConflictOut] = []
+    for c in rows:
+        o = db.get(Oven, c.oven_id)
+        out.append(
+            ConflictOut(
+                id=c.id,
+                batch_code=c.batch_code,
+                oven_id=c.oven_id,
+                oven_label=o.label if o else None,
+                detail=c.detail,
+                created_at=c.created_at,
+            )
+        )
+    return out
 
 
 @api_router.get("/windows", response_model=list[WindowOut])

@@ -59,6 +59,7 @@ class ConflictOut(BaseModel):
     id: int
     batch_code: str
     oven_id: int
+    oven_label: str | None = None
     detail: str
     created_at: datetime
     model_config = {"from_attributes": True}

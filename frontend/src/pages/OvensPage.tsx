@@ -30,9 +30,10 @@ export default function OvensPage() {
     if (hearth != null && (!Number.isInteger(hearth) || hearth < 1)) { setErr("炉膛盘数需为 ≥1 的整数（或留空）"); return; }
     setMsg(""); setErr(""); setSaving(o.id);
     try {
+      // 架/膛两项必须一起提交：只发一项会把另一项的改动丢掉
       const updated = await api<O>(`/ovens/${o.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ rack_slots: rack }),
+        body: JSON.stringify({ rack_slots: rack, hearth_slots: hearth }),
       });
       setRows((rs) => rs.map((r) => (r.id === o.id ? updated : r)));
       setMsg(`已保存：${o.label}（醒发架 ${updated.rack_slots ?? "—"} / 炉膛 ${updated.hearth_slots ?? "—"}）`);
