@@ -37,9 +37,9 @@ export default function GanttPage() {
       map.get(b.oven_id)!.blocks.push(b);
     }
     return [...map.entries()].map(([oid, row]) => {
-      const mixed = sweep(row.blocks).map((s) => ({ ...s, count: Math.max(1, s.count - 1) }));
-      const rack = mixed.filter((s) => s.count >= 2);
-      const hearth = mixed.filter((s) => s.count >= 2);
+      // 与后端同一套半开扫描：架只数发酵段，膛只数烘烤段
+      const rack = sweep(row.blocks.filter((b) => b.phase === "ferment")).filter((s) => s.count >= 2);
+      const hearth = sweep(row.blocks.filter((b) => b.phase === "bake")).filter((s) => s.count >= 2);
       return { oid, ...row, rack, hearth };
     });
   }, [blocks]);

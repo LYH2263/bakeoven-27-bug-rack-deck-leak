@@ -32,7 +32,7 @@ export default function OvensPage() {
     try {
       const updated = await api<O>(`/ovens/${o.id}`, {
         method: "PATCH",
-        body: JSON.stringify({ rack_slots: rack }),
+        body: JSON.stringify({ rack_slots: rack, hearth_slots: hearth }),
       });
       setRows((rs) => rs.map((r) => (r.id === o.id ? updated : r)));
       setMsg(`已保存：${o.label}（醒发架 ${updated.rack_slots ?? "—"} / 炉膛 ${updated.hearth_slots ?? "—"}）`);

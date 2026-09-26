@@ -123,21 +123,26 @@ def create_batch(body: BatchCreate, db: Session = Depends(get_db)):
     capacity = _capacity(oven)
 
     detail: str | None = None
-    hits = find_conflicts(existing, candidates)
-    if hits:
-        ex, cand = hits[0]
-        phase_name = "发酵段" if ex.phase == "ferment" else "烘烤段"
-        detail = (
-            f"时间重叠：与{_rival_label(db, ex.batch_id)} 的{phase_name}在 "
-            f"[{_fmt_min(cand.interval.start)},{_fmt_min(cand.interval.end)}) 重叠"
-        )
-    elif capacity.rack_slots is not None or capacity.hearth_slots is not None:
+    if capacity.rack_slots is None and capacity.hearth_slots is None:
+        # 两项都留空：只按时间半开重叠拦
+        hits = find_conflicts(existing, candidates)
+        if hits:
+            ex, cand = hits[0]
+            phase_name = "发酵段" if ex.phase == "ferment" else "烘烤段"
+            detail = (
+                f"时间重叠：与{_rival_label(db, ex.batch_id)} 的{phase_name}在 "
+                f"[{_fmt_min(cand.interval.start)},{_fmt_min(cand.interval.end)}) 重叠"
+            )
+    else:
+        # 设了上限：架只卡发酵、膛只卡烘烤，超了才拒
         violation = check_capacity(existing, candidates, capacity)
         if violation is not None:
             rivals = "、".join(_rival_label(db, rid) for rid in violation.rivals) or "（无）"
+            resource_name = "醒发架" if violation.resource == "rack" else "炉膛"
+            phase_name = "发酵" if violation.resource == "rack" else "烘烤"
             detail = (
-                f"时间重叠：与{rivals} 在 "
-                f"[{_fmt_min(violation.start)},{_fmt_min(violation.end)}) 重叠"
+                f"{resource_name}满（上限 {violation.limit}）：{violation.peak} 批{phase_name}在 "
+                f"[{_fmt_min(violation.start)},{_fmt_min(violation.end)}) 同时占用，对手：{rivals}"
             )
 
     if detail is not None:

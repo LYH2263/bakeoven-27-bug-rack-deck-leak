@@ -11,6 +11,9 @@ class Interval:
     end: int  # exclusive
 
     def overlaps(self, other: "Interval") -> bool:
+        # 空区间（如 0 分钟段）不占用任何时刻，与谁都不重叠
+        if self.end <= self.start or other.end <= other.start:
+            return False
         return self.start < other.end and other.start < self.end
 
 
@@ -123,17 +126,33 @@ def check_capacity(
     candidates: list[Occupancy],
     capacity: OvenCapacity,
 ) -> CapacityViolation | None:
-    """Check oven capacity against currently scheduled occupancy."""
+    """架只计发酵段、膛只计烘烤段；某项上限为 None 则该资源不计容。
+
+    架、膛都可能超限时先报架（发酵在时序上先于烘烤）。
+    """
     if not candidates:
         return None
     oven_id = candidates[0].oven_id
     on_oven = [o for o in existing if o.oven_id == oven_id]
-    if capacity.rack_slots is None and capacity.hearth_slots is None:
-        return None
-    limit = capacity.rack_slots if capacity.rack_slots is not None else 99
-    ex = [(o.interval.start, o.interval.end, o.batch_id) for o in on_oven]
-    cand = [(o.interval.start, o.interval.end, o.batch_id) for o in candidates]
-    return _sweep_violation(ex, cand, limit, "rack")
+
+    def tuples(occs: list[Occupancy]) -> list[tuple[int, int, int]]:
+        return [(o.interval.start, o.interval.end, o.batch_id) for o in occs]
+
+    for resource, limit, phase in (
+        ("rack", capacity.rack_slots, "ferment"),
+        ("hearth", capacity.hearth_slots, "bake"),
+    ):
+        if limit is None:
+            continue
+        violation = _sweep_violation(
+            tuples([o for o in on_oven if o.phase == phase]),
+            tuples([o for o in candidates if o.phase == phase]),
+            limit,
+            resource,
+        )
+        if violation is not None:
+            return violation
+    return None
 
 
 def next_free_window(

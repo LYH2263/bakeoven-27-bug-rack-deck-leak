@@ -26,6 +26,13 @@ def test_overlap_detected():
     assert find_conflicts(existing, cand)
 
 
+def test_zero_length_phase_never_overlaps():
+    # 0 分钟段（如发酵 0 的产品）是空区间，落在别人段内也不算重叠
+    empty = Occupancy(1, Interval(15, 15), "ferment", 2)
+    existing = [Occupancy(1, Interval(10, 20), "bake", 1)]
+    assert find_conflicts(existing, [empty]) == []
+
+
 def test_next_free_window_after_busy():
     existing = [
         Occupancy(1, Interval(0, 40), "ferment", 1),
